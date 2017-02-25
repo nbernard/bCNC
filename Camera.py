@@ -10,6 +10,12 @@ except ImportError:
 	cv = None
 
 try:
+        import picamera
+        has_picam = True
+except ImportError:
+	has_picam = False
+
+try:
 	from Tkinter import *
 except ImportError:
 	from tkinter import *
@@ -20,6 +26,7 @@ except ImportError:
 	cv = None
 
 import Utils
+import numpy as np
 
 #-------------------------------------------------------------------------------
 def hasOpenCV(): return cv is not None
@@ -34,43 +41,74 @@ class Camera:
 	#-----------------------------------------------------------------------
 	def __init__(self, prefix=""):
 		if cv is None: return
-		self.prefix  = prefix
-		self.idx     = Utils.getInt("Camera", prefix)
+                self.prefix  = prefix
 		self.camera  = None
+                idx = Utils.getInt("Camera", prefix)
+                if idx < 0:
+                        if not has_picam: return
+                        self.idx = abs(idx) - 1
+                        self.pi = True
+                else:
+                        self.idx = idx
+                        self.pi = False
 		self.image   = None
+                self.img_h   = None
+                self.img_w   = None
 		self.frozen  = None
 		self.imagetk = None
 
 	#-----------------------------------------------------------------------
 	def isOn(self):
 		if cv is None: return False
-		return self.camera is not None and self.camera.isOpened()
+		return self.camera is not None and (self.pi or self.camera.isOpened())
 
 	#-----------------------------------------------------------------------
 	def start(self):
 		if cv is None: return
-		self.camera = cv.VideoCapture(self.idx)
-		if self.camera is None: return
-		s, self.image = self.camera.read()
-		if not self.camera.isOpened():
-			self.stop()
-			return False
-		self.set()
+                if self.pi:
+                        self.camera = picamera.PiCamera(camera_num=self.idx)
+                else:
+		        self.camera = cv.VideoCapture(self.idx)
+                if self.camera is None:
+                        return
+                if not self.pi:
+		        s, self.image = self.camera.read()
+		        if not self.camera.isOpened():
+			        self.stop()
+			        return False
+                self.set()
 		return True
 
 	#-----------------------------------------------------------------------
 	def stop(self):
 		if cv is None or self.camera is None: return
-		self.camera.release()
+                if self.pi:
+                        self.camera.close()
+                else:
+		        self.camera.release()
 #		del self.camera
 		self.camera = None
 
 	#-----------------------------------------------------------------------
 	def set(self):
 		width = Utils.getInt("Camera", self.prefix+"_width",  0)
-		if width: self.camera.set(3, width)
 		height = Utils.getInt("Camera", self.prefix+"_height",  0)
-		if height: self.camera.set(4, height)
+		if self.pi:
+                        if not width:
+                                width = 512
+                        if not height:
+                                height = 512
+                        self.camera.resolution = (width, height)
+                        self.img_h = height
+                        self.img_w = width
+#                        self.camera.framerate = 24
+                        self.image = np.empty((height* width* 3,), dtype=np.uint8)
+                        self.image = self.image.reshape((self.img_h * self.img_w * 3,))
+                        self.camera.capture(self.image, 'bgr')
+                        self.image = self.image.reshape((self.img_h, self.img_w, 3))
+                else:
+                        if width: self.camera.set(3, width)
+		        if height: self.camera.set(4, height)
 		self.angle = Utils.getInt("Camera", self.prefix+"_angle")//90 % 4
 #		self.camera.set(38, 3) # CV_CAP_PROP_BUFFERSIZE
 
@@ -78,7 +116,13 @@ class Camera:
 	# Read one image and rotated if needed
 	#-----------------------------------------------------------------------
 	def read(self):
-		s,self.image = self.camera.read()
+                if self.pi:
+                        self.image = self.image.reshape((self.img_h * self.img_w * 3,))
+                        self.camera.capture(self.image, 'bgr')
+                        self.image = self.image.reshape((self.img_h, self.img_w, 3))
+                        s = 1 # todo ?
+                else:
+		        s,self.image = self.camera.read()
 		if s:
 			self.image = self.rotate90(self.image)
 		else:
